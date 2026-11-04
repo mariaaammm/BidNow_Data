@@ -2,14 +2,14 @@ env/
 .venv/
 env/
 .env
-.env.example
 .env.local
 .vscode/
 .DS_Store
 Thumbs.db
 __pycache__/
-data/
 venv/
 *.pt
 conf.txt
 *.db
+.pytest_cache/
+.ipynb_checkpoints/

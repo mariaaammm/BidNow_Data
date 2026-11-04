@@ -1,9 +1,20 @@
-import re
+import re, json
+from pathlib import Path
 
-from category_config import CATEGORIES
-from category_keywords import KEYWORDS
+_DIR = Path(__file__).parent
+
+def _load(filename):
+    with open(_DIR / filename, encoding='utf-8') as f:
+        return json.load(f)
 
 
+_categories = _load('categories.json')
+CATEGORIES = _categories['categories']
+LISTING_TYPES = _categories['listing_types']
+CONDITIONS = _categories['conditions']
+KEYWORDS = _load('category_keywords.json')  
+
+# Plurals that the simple rules cut wrongly
 IRREGULAR = {
     'buses': 'bus', 'minibuses': 'minibus', 'gases': 'gas', 'lenses': 'lens', 'canvases': 'canvas',
     'tvs': 'tv', 'cds': 'cd', 'dvds': 'dvd', 'cvs': 'cv', 'djs': 'dj', 'rvs': 'rv', 'pcs': 'pc',
@@ -15,6 +26,15 @@ IRREGULAR = {
     'tomatoes': 'tomato', 'potatoes': 'potato', 'mangoes': 'mango',
     'children': 'child', 'mice': 'mouse', 'feet': 'foot', 'teeth': 'tooth',
 }
+
+# Words that end in "s" but are not plurals (the "s" must stay)
+# Words of 3 letters or less and words ending in "ss" are checked below
+EXCEPTIONS = {
+    'plus', 'bonus', 'status', 'campus', 'focus', 'virus', 'cactus', 'citrus', 'genius',
+    'canvas', 'news', 'series', 'species', 'chassis', 'atlas', 'bias', 'iris', 'tennis',
+    'christmas', 'lens', 'lexus', 'asparagus', 'hummus', 'couscous',
+}
+
 
 def flatten_category_hierarchy(categories=CATEGORIES):
     '''
@@ -40,27 +60,29 @@ def singular(word):
     Simple plural -> singular: accessories -> accessory, watches -> watch, jeans -> jean
     '''
 
-    EXCEPTIONS = {
-    'plus', 'bonus', 'status', 'campus', 'focus', 'virus', 'cactus', 'citrus', 'genius',
-    'canvas', 'news', 'series', 'species', 'chassis', 'atlas', 'bias', 'iris', 'tennis',
-    'christmas', 'lens', 'lexus', 'asparagus', 'hummus', 'couscous',
-    }
-
+    if word in IRREGULAR:
+        return IRREGULAR[word]
     if len(word) <= 3 or word in EXCEPTIONS:
         return word
     if word.endswith('ies'):
-        return word[:-3] + 'y' # accessories -> accessory
+        return word[:-3] + 'y'    # accessories -> accessory
     if word.endswith(('ches', 'shes', 'xes', 'sses')):
-        return word[:-2]  # watches -> watch, dresses -> dress
+        return word[:-2]          # watches -> watch, dresses -> dress
     if word.endswith('s') and not word.endswith('ss'):
         return word[:-1]
     return word
 
 
 def clean(text):
-    text = str(text).lower().replace("'", '').replace('\u2019', '')   # Children's -> childrens
+    '''
+    'Cartier Wristwatches!' -> 'cartier wristwatch' (lowercase, only words, singular)
+    '''
+    text = str(text).lower()
+    text = re.sub(r"['’]s\b", '', text)           # Children's -> children, Men's -> men
+    text = text.replace("'", '').replace('’', '')  # kids' -> kids
     words = re.findall(r'\w+', text)
-    return ' '.join(IRREGULAR.get(w) or singular(w) for w in words)
+
+    return ' '.join(singular(w) for w in words)
 
 
 # Clean the keywords once, not on every call
@@ -106,10 +128,3 @@ def classify(item):
 if __name__ == '__main__':
     for sample in ['iphone 13', 'cartier wristwatch', 'baby monitor', 'toyota camry 2015', '3 room apartment in yerevan', 'something strange']:
         print(f'{sample!r:32} -> {classify(sample)}')
-
-
-
-
-
-
-                                                              
