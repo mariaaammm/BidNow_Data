@@ -22,8 +22,6 @@ venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 ```
 
-If PowerShell blocks the script run `Set-ExecutionPolicy -Scope Process RemoteSigned` first.
-
 **macOS and Linux**
 
 ```bash
