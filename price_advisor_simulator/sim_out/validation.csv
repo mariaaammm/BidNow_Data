@@ -1,0 +1,13 @@
+metric,real,simulated
+median final price - Cartier wristwatch,510.0,531.895
+median final price - Palm Pilot M515 PDA,231.5,226.955
+median final price - Xbox game console,123.15,115.0
+mean bids per auction,17.008,17.937
+median distinct bidders per auction,8.0,9.0
+share of bids in the last day,0.503,0.502
+share of bids in the last hour,0.16,0.155
+median bids when opening bid < 25% of typical price,22.0,22.0
+median bids when opening bid > 60% of typical price,6.0,7.0
+bids per bidder (average),3.154,3.461
+share of bids from the top 10% of bidders,0.381,0.365
+share of bidders who bid only once,0.428,0.341

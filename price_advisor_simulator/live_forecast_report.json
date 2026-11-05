@@ -1,0 +1,44 @@
+[
+  {
+    "share_of_time_elapsed_pct": 10,
+    "auctions": 628,
+    "guess: current high bid": 59.3,
+    "guess: item median": 11.0,
+    "live forecast": 10.7
+  },
+  {
+    "share_of_time_elapsed_pct": 25,
+    "auctions": 628,
+    "guess: current high bid": 51.0,
+    "guess: item median": 11.0,
+    "live forecast": 9.8
+  },
+  {
+    "share_of_time_elapsed_pct": 50,
+    "auctions": 628,
+    "guess: current high bid": 36.1,
+    "guess: item median": 11.0,
+    "live forecast": 9.1
+  },
+  {
+    "share_of_time_elapsed_pct": 75,
+    "auctions": 628,
+    "guess: current high bid": 23.9,
+    "guess: item median": 11.0,
+    "live forecast": 8.7
+  },
+  {
+    "share_of_time_elapsed_pct": 90,
+    "auctions": 628,
+    "guess: current high bid": 13.9,
+    "guess: item median": 11.0,
+    "live forecast": 7.9
+  },
+  {
+    "share_of_time_elapsed_pct": 97,
+    "auctions": 628,
+    "guess: current high bid": 5.4,
+    "guess: item median": 11.0,
+    "live forecast": 5.4
+  }
+]

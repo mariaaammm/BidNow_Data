@@ -1,0 +1,98 @@
+{
+  "n_auctions": 628,
+  "cv": "5-fold x 2",
+  "overall": {
+    "base_item": {
+      "MAE": 142.92,
+      "median_abs_pct_err": 10.9
+    },
+    "base_item_dur": {
+      "MAE": 145.2,
+      "median_abs_pct_err": 10.9
+    },
+    "model": {
+      "MAE": 111.84,
+      "median_abs_pct_err": 9.4
+    },
+    "range_coverage_pct": 79.9,
+    "typical_high_over_low": 1.27
+  },
+  "by_item": {
+    "Cartier wristwatch": {
+      "auctions": 136,
+      "base_item": {
+        "MAE": 573.9,
+        "median_abs_pct_err": 58.1
+      },
+      "model": {
+        "MAE": 434.97,
+        "median_abs_pct_err": 43.9
+      },
+      "range_coverage_pct": 80.5,
+      "typical_high_over_low": 6.38
+    },
+    "Palm Pilot M515 PDA": {
+      "auctions": 343,
+      "base_item": {
+        "MAE": 17.82,
+        "median_abs_pct_err": 6.6
+      },
+      "model": {
+        "MAE": 16.05,
+        "median_abs_pct_err": 5.4
+      },
+      "range_coverage_pct": 79.6,
+      "typical_high_over_low": 1.27
+    },
+    "Xbox game console": {
+      "auctions": 149,
+      "base_item": {
+        "MAE": 37.53,
+        "median_abs_pct_err": 18.5
+      },
+      "model": {
+        "MAE": 37.4,
+        "median_abs_pct_err": 18.0
+      },
+      "range_coverage_pct": 79.9,
+      "typical_high_over_low": 2.4
+    }
+  },
+  "opening_bid_evidence": [
+    {
+      "opening_bid_vs_typical_price": "under 5%",
+      "auctions": 291,
+      "median_final_vs_typical": 1.0,
+      "median_bids": 23.0,
+      "share_with_single_bid_pct": 0.3
+    },
+    {
+      "opening_bid_vs_typical_price": "5-25%",
+      "auctions": 73,
+      "median_final_vs_typical": 0.94,
+      "median_bids": 19.0,
+      "share_with_single_bid_pct": 0.0
+    },
+    {
+      "opening_bid_vs_typical_price": "25-60%",
+      "auctions": 81,
+      "median_final_vs_typical": 0.98,
+      "median_bids": 13.0,
+      "share_with_single_bid_pct": 0.0
+    },
+    {
+      "opening_bid_vs_typical_price": "60-90%",
+      "auctions": 111,
+      "median_final_vs_typical": 0.93,
+      "median_bids": 7.0,
+      "share_with_single_bid_pct": 3.6
+    },
+    {
+      "opening_bid_vs_typical_price": "over 90%",
+      "auctions": 72,
+      "median_final_vs_typical": 1.13,
+      "median_bids": 3.5,
+      "share_with_single_bid_pct": 22.2
+    }
+  ]
+}
