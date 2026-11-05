@@ -1,0 +1,29 @@
+# Local database + Metabase for the Data team.
+#   1) python simulator.py            (creates sim_out/*.csv)
+#   2) docker compose up -d
+#   3) open http://localhost:3000 (Metabase) and add a PostgreSQL database:
+#        host: db   port: 5432   database: bidnow   user: bidnow   password: bidnow
+# The CSVs are loaded only the first time. To reload new data:  docker compose down -v && docker compose up -d
+# (Local use only: the passwords below are for a throwaway database on your own computer.)
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: bidnow
+      POSTGRES_PASSWORD: bidnow
+      POSTGRES_DB: bidnow
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./schema.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
+      - ./db/02_load.sh:/docker-entrypoint-initdb.d/02_load.sh:ro
+      - ./sim_out:/data:ro
+      - pgdata:/var/lib/postgresql/data
+  metabase:
+    image: metabase/metabase:latest
+    ports:
+      - "3000:3000"
+    depends_on:
+      - db
+volumes:
+  pgdata:
