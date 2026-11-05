@@ -62,7 +62,7 @@ classify('3 room apartment')     # 'Real Estate'
 classify('qwerty')               # 'Other'
 ```
 
-- `categories.json`: list.am category tree (3 levels)
+- `categories.json`: category tree (3 levels)
 - `category_keywords.json`: keywords per sub category (lowercase and singular)
 - `category_preprocessing.py`: `clean()` and `classify()`
 
