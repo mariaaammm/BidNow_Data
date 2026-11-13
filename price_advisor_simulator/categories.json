@@ -1,0 +1,13 @@
+{
+  "_WARNING": "These categories and prices are ASSUMED PLACEHOLDERS, not measured. They let the simulator make a site that looks like a real marketplace. Replace median_price/price_sigma with numbers from your own research (for example list.am) before showing any chart built on them. Bid behaviour (how many bids, when they arrive) is borrowed from the real auction.csv item named in 'like'. Listings from these categories are marked price_basis='assumed' in listings.csv.",
+  "currency_note": "All prices are in the same currency as auction.csv (US dollars). Convert if you prefer AMD.",
+  "categories": {
+    "Smartphone":          {"like": "Palm Pilot M515 PDA", "median_price": 250,  "price_sigma": 0.45, "weight": 3.0},
+    "Laptop":              {"like": "Xbox game console",   "median_price": 400,  "price_sigma": 0.50, "weight": 2.0},
+    "Headphones":          {"like": "Palm Pilot M515 PDA", "median_price": 60,   "price_sigma": 0.50, "weight": 2.0},
+    "Bicycle":             {"like": "Xbox game console",   "median_price": 150,  "price_sigma": 0.55, "weight": 2.0},
+    "Wristwatch (other)":  {"like": "Cartier wristwatch",  "median_price": 120,  "price_sigma": 0.90, "weight": 1.5},
+    "Furniture":           {"like": "Xbox game console",   "median_price": 90,   "price_sigma": 0.60, "weight": 1.5},
+    "Used car":            {"like": "Xbox game console",   "median_price": 5000, "price_sigma": 0.70, "weight": 1.0}
+  }
+}
