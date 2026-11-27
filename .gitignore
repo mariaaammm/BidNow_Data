@@ -1,6 +1,5 @@
 env/
 .venv/
-env/
 .env
 .env.local
 .vscode/
@@ -11,5 +10,7 @@ venv/
 *.pt
 conf.txt
 *.db
+metabase.jar
+plugins/
 .pytest_cache/
 .ipynb_checkpoints/
