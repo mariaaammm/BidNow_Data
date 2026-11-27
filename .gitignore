@@ -13,3 +13,5 @@ venv/
 *.pt
 conf.txt
 *.db
+metabase.jar
+plugins/
