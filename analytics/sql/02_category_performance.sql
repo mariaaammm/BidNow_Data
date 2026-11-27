@@ -1,3 +1,7 @@
+-- Purpose: Category-level engagement, bid volume, and won GMV breakdown
+-- Grain: Item category
+-- Notes: total_won_gmv sums bid_amount exclusively on auction_won events to avoid double counting
+
 SELECT
     category,
     COUNT(CASE WHEN event_name = 'item_viewed' THEN 1 END) AS total_views,

@@ -1,3 +1,6 @@
+-- Purpose: Price appreciation from starting price to final winning price on completed auctions
+-- Grain: Item category (filtered to auctions with both item_created and auction_won events)
+
 WITH auction_prices AS (
     SELECT
         auction_id,

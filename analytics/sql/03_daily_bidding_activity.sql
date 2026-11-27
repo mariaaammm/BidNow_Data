@@ -1,3 +1,6 @@
+-- Purpose: Daily marketplace activity (views, bids, wins) and won GMV over time
+-- Grain: Calendar date (UTC)
+
 SELECT
     DATE(timestamp) AS event_date,
     COUNT(CASE WHEN event_name = 'item_viewed' THEN 1 END) AS item_views,

@@ -1,3 +1,7 @@
+-- Purpose: Core auction conversion funnel across total events and unique authenticated users
+-- Grain: Funnel stage (item_viewed -> bid_placed -> auction_won)
+-- Notes: Guest views (user_id IS NULL) are counted in total_events and excluded from unique_users
+
 SELECT
     event_name,
     COUNT(*) AS total_events,
