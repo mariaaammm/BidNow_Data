@@ -1,0 +1,40 @@
+{
+  "n_auctions": 628,
+  "opening_bid_evidence": [
+    {
+      "opening_bid_vs_typical_price": "under 5%",
+      "auctions": 291,
+      "median_final_vs_typical": 1.0,
+      "median_bids": 23.0,
+      "share_with_single_bid_pct": 0.3
+    },
+    {
+      "opening_bid_vs_typical_price": "5-25%",
+      "auctions": 73,
+      "median_final_vs_typical": 0.94,
+      "median_bids": 19.0,
+      "share_with_single_bid_pct": 0.0
+    },
+    {
+      "opening_bid_vs_typical_price": "25-60%",
+      "auctions": 81,
+      "median_final_vs_typical": 0.98,
+      "median_bids": 13.0,
+      "share_with_single_bid_pct": 0.0
+    },
+    {
+      "opening_bid_vs_typical_price": "60-90%",
+      "auctions": 111,
+      "median_final_vs_typical": 0.93,
+      "median_bids": 7.0,
+      "share_with_single_bid_pct": 3.6
+    },
+    {
+      "opening_bid_vs_typical_price": "over 90%",
+      "auctions": 72,
+      "median_final_vs_typical": 1.13,
+      "median_bids": 3.5,
+      "share_with_single_bid_pct": 22.2
+    }
+  ]
+}
