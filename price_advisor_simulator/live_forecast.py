@@ -31,7 +31,7 @@ FRACS = [0.1, 0.25, 0.5, 0.75, 0.9, 0.97]  # moments in the auction's life used 
 
 def build_snapshots(path) -> pd.DataFrame:
     """For each auction, look at it at several moments: what did the bids look like then?"""
-    df = pd.read_csv(path)
+    df = pd.read_csv(path, encoding="utf-8-sig")
     df["dur"] = df.auction_type.str.extract(r"(\d+)")[0].astype(float)
     rows = []
     for aid, g in df.groupby("auctionid"):
@@ -91,9 +91,13 @@ class LiveForecaster:
     def predict(self, item, duration_days, openbid, elapsed_days, current_high, n_bids):
         if item not in self.items:
             raise ValueError(f"unknown item '{item}'. Known items: {self.items}")
+        if not duration_days > 0:
+            raise ValueError("auction length (--days) must be greater than 0")
+        if elapsed_days < 0 or current_high < 0 or openbid < 0 or n_bids < 0:
+            raise ValueError("--elapsed, --high, --openbid and --bids cannot be negative")
         frac = float(np.clip(elapsed_days / duration_days, 0.0, 0.995))
         row = pd.DataFrame([{"item": item, "duration_days": duration_days, "openbid": openbid, "frac": frac,
-                             "high": max(current_high, openbid), "n_bids_so_far": n_bids}])
+                             "high": max(current_high, openbid, 0.01), "n_bids_so_far": n_bids}])
         mu = float(self._log_ratio(self._X(row), [frac])[0])
         nearest = min(FRACS, key=lambda f: abs(f - frac))
         lo, hi = self.resid_q[nearest]
@@ -146,7 +150,7 @@ def main():
         print(table.to_string(index=False))
         lf = LF().fit(s, auctions)
         joblib.dump(lf, MODEL_PATH)
-        REPORT_PATH.write_text(json.dumps(table.to_dict("records"), indent=2))
+        REPORT_PATH.write_text(json.dumps(table.to_dict("records"), indent=2), encoding="utf-8")
         print(f"\nsaved {MODEL_PATH.name} and {REPORT_PATH.name}")
     else:
         if not MODEL_PATH.exists():

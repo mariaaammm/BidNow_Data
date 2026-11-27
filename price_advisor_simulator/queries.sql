@@ -64,11 +64,14 @@ GROUP BY 1
 ORDER BY min(decile);
 
 -- Q7  Live auctions ending soon, with the current price
-SELECT listing_id, item, current_price, n_bids,
-       round((extract(epoch FROM (ends_at - now())) / 3600)::numeric, 1) AS hours_left
-FROM listings
-WHERE status = 'active' AND ends_at > now()
-ORDER BY ends_at
+-- "now" = the time of the newest bid, so this still works on a simulator snapshot made some days ago.
+-- With real BidNow data, replace the first line of the CTE with:  SELECT now() AS t
+WITH ref AS (SELECT max(placed_at) AS t FROM bids)
+SELECT l.listing_id, l.item, l.current_price, l.n_bids,
+       round((extract(epoch FROM (l.ends_at - ref.t)) / 3600)::numeric, 1) AS hours_left
+FROM listings l, ref
+WHERE l.status = 'active' AND l.ends_at > ref.t
+ORDER BY l.ends_at
 LIMIT 20;
 
 -- Q8  Does a low opening bid attract more bids? (closed auctions of measured items)
