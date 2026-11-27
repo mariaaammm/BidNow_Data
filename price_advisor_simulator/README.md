@@ -8,13 +8,15 @@ Palm Pilot M515 PDA, Xbox game console). No server or API is needed; everything 
 |---|---|
 | `price_advisor.py` | Predicts a listing's final price, a price range, a suggested opening bid and a tip |
 | `live_forecast.py` | Predicts the final price of a RUNNING auction from the bids so far |
-| `simulator.py` | Generates fake users, listings and bids that behave like the real data |
+| `simulator.py` | Generates fake users, listings and bids that behave like the real data (2 modes: machine learning or statistics) |
+| `sim_ml.py` | The 3 machine learning models used by the simulator; `python sim_ml.py` tests them |
 | `categories.json` | Optional extra categories for the simulator (ASSUMED prices, edit them) |
 | `schema.sql` | DRAFT PostgreSQL schema (agree on it with the Core team) |
 | `queries.sql` | 8 ready dashboard queries for Metabase |
 | `load_db.sh`, `docker-compose.yml`, `db/` | Load the simulator output into PostgreSQL; optional Docker + Metabase |
 | `local_prices_template.csv` | Header for your own price data (see below) |
-| `.gitignore` | Keeps generated files (trained models, big CSVs) out of git |
+| `test_project.py` | 27 automatic checks of everything (run `python test_project.py`, about 2 minutes) |
+| `.gitignore`, `.gitattributes` | Keep generated files out of git; keep Linux line endings in `.sh`/`.sql` files on Windows |
 | `sim_out/` | Created by `simulator.py`: `users.csv`, `listings.csv`, `bids.csv`, `validation.csv` (only `validation.csv` is kept in git) |
 | `price_advisor_report.json`, `live_forecast_report.json` | Saved evaluation results |
 
@@ -27,6 +29,9 @@ python price_advisor.py predict --item "Xbox game console" --days 7 --openbid 9.
 python live_forecast.py train
 python live_forecast.py predict --item "Palm Pilot M515 PDA" --days 7 --openbid 1 --elapsed 5 --high 180 --bids 9
 python simulator.py                       # writes sim_out/*.csv, checks them, compares with the real data
+python simulator.py --mode stats         # same without machine learning (faster)
+python sim_ml.py                          # tests the 3 simulator models on auctions they have not seen
+python test_project.py                    # runs 27 automatic checks (inputs, files, reproducibility, quality)
 ```
 `train` takes about a minute because it also tests the model. Add `--no-eval` to skip the test.
 
@@ -79,7 +84,7 @@ item,duration_days,openbid,price,n_bids        (n_bids is optional; see local_pr
 python price_advisor.py train --data auction.csv my_prices.csv
 python price_advisor.py items
 ```
-Items with fewer than 10 rows are dropped with a warning. Aim for a few hundred rows per item. Without
+CSV files saved by Excel work too (`;` separator, decimal comma like `9,99`, BOM, Windows encodings). Items with fewer than 10 rows are dropped with a warning. Aim for a few hundred rows per item. Without
 `n_bids`, the opening-bid tip uses only the rows that have it.
 
 ## 2. Live forecast (for running auctions)
@@ -100,36 +105,61 @@ and the code automatically uses it. It needs bid-level data, so for now it only 
 (later it could train on BidNow's own `bids` table).
 
 ## 3. Data simulator
-Learns from the real data: item and length mix, opening bids, price spread per item, bid counts, who
-bids, and **when** bids arrive. Features:
-- **Live site look:** some auctions are closed and some are still running "now" (about 19%).
-- **Opening bid matters, like in the real data:** low opening bids attract many more bids.
-- **Concentrated bidders:** a few bidders place many bids, many bid only once.
-- **Built-in checks:** 11 rules are verified every run (bids rise, sellers never bid on their own listing,
-  final price = highest bid, ...). The run stops if any fails. These checks found and fixed a real bug during development.
-- **Same `--seed` and `--now` = same output.** Options: `--listings`, `--days`, `--users`, `--seed`, `--now`, `--out`.
+Learns from the real data (item and length mix, opening bids, price spread, bid counts, who bids, **when** bids
+arrive) and generates fake users, listings and bids. Some auctions are closed and some are still running "now"
+(about 19%). Same `--seed` and `--now` give the same output. Options: `--mode`, `--listings`, `--days`, `--users`,
+`--seed`, `--now`, `--out`, `--categories`, `--real-share`. Wrong values (for example `--users 5` or a broken `categories.json`) stop with a clear message; `--users` must be at least 100.
 
-**Real vs simulated** (`sim_out/validation.csv`, closed auctions of the 3 real items):
+**Two modes**
+- `--mode ml` (default) uses three machine learning models trained on the real data (`sim_ml.py`):
+  1. **Price:** the price advisor's gradient boosting model, plus a real past error of similar auctions, gives the final price.
+  2. **Number of bids:** gradient boosting with Poisson loss, with a negative-binomial spread.
+  3. **Price over time:** gradient boosting *quantile* models learn how fast the highest bid climbs during an auction
+     (each fake auction gets its own speed, so its price path is smooth).
+  The length and the opening bid of an auction are also drawn together from a real auction, because in the real data
+  short auctions start much higher (3-day median opening bid 99, 7-day 9.99).
+- `--mode stats` uses only statistics and random sampling. It is faster and needs no scikit-learn, but its prices climb too slowly.
 
-| Metric | Real | Simulated |
-|---|---|---|
-| Median final price: Cartier / Palm Pilot / Xbox | 510 / 231.5 / 123.2 | 532 / 227 / 115 |
-| Mean bids per auction | 17.0 | 17.9 |
-| Share of bids in the last day / last hour | 50.3% / 16.0% | 50.2% / 15.5% |
-| Median bids if opening bid < 25% / > 60% of typical | 22 / 6 | 22 / 7 |
-| Share of bids from the top 10% of bidders | 38.1% | 36.5% |
-| Bids per bidder / bidders who bid only once | 3.15 / 42.8% | 3.46 / 34.1% |
+**Why the machine learning mode exists (an honest finding).** While adding it I compared the first version with the
+real data on something I had not checked before: how the highest bid grows during an auction. The first version was wrong.
+Halfway through an auction the real highest bid is about 64% of the final price, but the statistical mode gave about 25%,
+and it gave 3-day auctions a 10 instead of a 99 opening bid. The validation now checks both. Do not use `--mode stats`
+for any chart of price over time.
 
-Prices and timing match well. Bidder behaviour is only approximate: the real sample is small
-(628 auctions), so a perfect match is not possible.
+**Do the models learn something real?** Tested on auctions not used for training (`python sim_ml.py`):
+- Price over time (lower error is better): 0.0760 with no model, 0.0525 knowing only how far the auction has gone, 0.0480 with length, item, opening bid and number of bids.
+- Number of bids (lower is better): 6.54 with a constant average, 3.02 with the model.
+- Price: see section 1 (typical error 9.4% against 10.9% for the baseline).
 
-**More categories.** `python simulator.py --categories categories.json` adds Smartphone, Laptop, Bicycle, etc.
-Their prices in `categories.json` are **assumed placeholders, not measured**. Their listings are marked
-`price_basis = 'assumed'`, so dashboards can separate them. Replace the numbers with real ones from your research.
+**Real vs simulated** (`sim_out/validation.csv`, closed auctions of the 3 real items; statistical mode on the right for comparison):
 
-**Limits to say out loud:** bid amounts only go up (the real data has proxy-bidding noise); behaviour is learned
-from 3 old US items; activity ramps up during the first days of the window because the simulated site "launches"
-at its start; the sample data is a snapshot, so rerun `simulator.py` to refresh "now".
+| Metric | Real | ML mode | Statistical mode |
+|---|---|---|---|
+| Highest bid / final price at 25% of the time | 0.49 | 0.58 | 0.15 |
+| ... at 50% | 0.64 | 0.66 | 0.25 |
+| ... at 75% | 0.76 | 0.73 | 0.36 |
+| ... at 90% | 0.86 | 0.82 | 0.52 |
+| Median opening bid, 3-day / 7-day auctions | 99 / 9.99 | 99 / 9.99 | 9.99 / 10 |
+| Median final price: Cartier / Palm Pilot / Xbox | 510 / 231.5 / 123.2 | 570 / 234 / 129 | 532 / 227 / 115 |
+| Mean bids per auction | 17.0 | 17.0 | 17.9 |
+| Share of bids in the last day / last hour | 50.3% / 16.0% | 50.0% / 15.7% | 50.2% / 15.5% |
+| Median bids if opening bid < 25% / > 60% of typical | 22 / 6 | 22 / 7 | 22 / 7 |
+| Share of bids from the top 10% of bidders | 38.1% | 35.9% | 36.5% |
+| Bids per bidder / bidders who bid only once | 3.15 / 42.8% | 3.44 / 33.9% | 3.46 / 34.1% |
+
+Where it is still off: the Cartier price runs about 7% to 15% above the real median (the real median itself is uncertain,
+about 450 to 630, because there are only 136 Cartier auctions); the link between opening bid and final price is weaker than real for the Xbox
+(correlation 0.02 against 0.17); bidder behaviour is only approximate (the real sample is small).
+
+**Other features:** 11 built-in checks run every time (bids rise, sellers never bid on their own listing, final price = highest bid, ...)
+and the run stops if any fails. `python simulator.py --categories categories.json` adds Smartphone, Laptop, Bicycle, etc. Their prices in
+`categories.json` are **assumed placeholders, not measured**; their listings are marked `price_basis = 'assumed'`. Replace the numbers
+with real ones from your research.
+
+**Limits to say out loud:** bid amounts only go up (the real data has proxy-bidding noise); behaviour is learned from 3 old US items;
+activity ramps up during the first days of the window because the simulated site "launches" at its start; the sample data is a
+snapshot, so rerun `simulator.py` to refresh "now". ML mode takes about 15 seconds to train before it generates, and about 2 minutes
+for 20,000 listings.
 
 ## 4. Database and dashboards
 ```bash
@@ -141,7 +171,7 @@ Or with Docker: `docker compose up -d`, then open http://localhost:3000 (Metabas
 (host `db`, database/user/password `bidnow`). Paste the queries from `queries.sql` as SQL questions.
 
 **What was tested:** `schema.sql`, `load_db.sh` and all 8 queries ran on a real PostgreSQL 18.4 with the sample
-data (32,359 users, 2,000 listings, 31,338 bids; all constraints passed). **Not tested:** `docker-compose.yml`
+data (32,359 users, 2,000 listings, about 30,000 bids; all constraints passed). Query 7 treats the time of the newest bid as "now", so it also works on an older snapshot. **Not tested:** `docker-compose.yml`
 and Metabase, because Docker is not available in my workspace. If Docker complains, check the file paths first.
 
 ## Be honest about this when presenting

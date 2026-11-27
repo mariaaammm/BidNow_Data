@@ -43,11 +43,25 @@ SUGGESTED_START_SHARE = 0.10  # suggest opening at ~10% of the expected price (s
 
 
 # ------------------------------------------------------------------ loading
+def read_table(path) -> pd.DataFrame:
+    """Read a CSV the way Excel on Windows may have saved it: BOM, ';' or tab separators, old Windows encodings."""
+    last = None
+    for enc in ("utf-8-sig", "cp1251", "latin-1"):
+        try:
+            with open(path, encoding=enc) as f:
+                head = f.readline()
+            sep = max([",", ";", "\t"], key=head.count)
+            return pd.read_csv(path, sep=sep, encoding=enc)
+        except UnicodeDecodeError as e:
+            last = e
+    raise ValueError(f"{path}: cannot read the file ({last})")
+
+
 def load_auctions(*paths) -> pd.DataFrame:
     """Return one row per auction: item, duration_days, openbid, price, n_bids."""
     frames = []
     for p in paths or [DEFAULT_DATA]:
-        df = pd.read_csv(p)
+        df = read_table(p)
         if {"auctionid", "bid", "auction_type"} <= set(df.columns):  # eBay bid-level file
             a = df.groupby("auctionid").agg(
                 item=("item", "first"), auction_type=("auction_type", "first"),
@@ -68,6 +82,8 @@ def load_auctions(*paths) -> pd.DataFrame:
         raise ValueError("no data rows found in the given file(s)")
     a = pd.concat(frames, ignore_index=True)
     for c in ["duration_days", "openbid", "price", "n_bids"]:
+        if not pd.api.types.is_numeric_dtype(a[c]):  # Excel with a decimal comma: "9,99" -> 9.99
+            a[c] = a[c].astype(str).str.strip().str.replace(",", ".", regex=False)
         a[c] = pd.to_numeric(a[c], errors="coerce")  # text in a number column becomes "missing"
     n_all = len(a)
     a = a.dropna(subset=REQUIRED)
@@ -129,9 +145,18 @@ class PriceAdvisor:
             oof[te] = self._fit_predict(X.iloc[tr], y[tr], X.iloc[te])
         resid = y - oof
         self.pooled_q = (float(np.quantile(resid, 0.10)), float(np.quantile(resid, 0.90)))
-        self.resid_q = {}
+        # Estimates made WITHOUT having seen each auction (used by simulator.py --mode ml: it must not use predictions that
+        # are too good because the model has already seen that auction)
+        self.oof_mu = (pd.DataFrame({"item": a.item.values, "dur": a.duration_days.astype(float).values,
+                                     "ob": a.openbid.astype(float).values, "mu": oof})
+                       .groupby(["item", "dur", "ob"]).mu.mean().to_dict())
+        self.resid_q, self.resid_by_item, self.resid_pool = {}, {}, {}
+        bucket = np.searchsorted(EDGES[1:-1], (a.openbid / a.item.map(self.medians)).values, side="left")
         for it in self.items:
             r = resid[(a.item == it).values]
+            self.resid_by_item[it] = r  # real out-of-fold errors, used by simulator.py --mode ml to draw realistic prices
+            for b in range(len(LABELS)):  # the error is smaller when the opening bid is already high: keep them apart
+                self.resid_pool[(it, b)] = resid[((a.item == it).values) & (bucket == b)]
             self.resid_q[it] = ((float(np.quantile(r, 0.10)), float(np.quantile(r, 0.90)))
                                 if len(r) >= POOLED_RANGE_MIN_ROWS else self.pooled_q)
         self._fit_evidence(a)
@@ -159,6 +184,10 @@ class PriceAdvisor:
         if item not in self.items:
             raise ValueError(f"unknown item '{item}'. Known items: {self.items}. "
                              "Add local data with: python price_advisor.py train --data auction.csv yourfile.csv")
+        if not duration_days > 0:
+            raise ValueError("auction length (--days) must be greater than 0")
+        if not openbid >= 0:
+            raise ValueError("opening bid (--openbid) cannot be negative")
         X = self._X([item], [duration_days], [openbid])
         mu = float(self._predict_log(X)[0])
         q_lo, q_hi = self.resid_q[item]
@@ -172,6 +201,17 @@ class PriceAdvisor:
                 "suggested_opening_bid": suggested,
                 "opening_bid_vs_typical_price_pct": round(float(ratio * 100), 1),
                 "tip": self._tip(ratio, suggested)}
+
+    def sample_price(self, item, duration_days, openbid, rng):
+        """One random but realistic final price: the model's estimate plus a real past error for this item."""
+        mu = self.oof_mu.get((item, float(duration_days), float(openbid)))
+        if mu is None:  # a combination not seen in the training data: use the model itself
+            mu = float(self._predict_log(self._X([item], [duration_days], [openbid]))[0])
+        b = int(np.searchsorted(EDGES[1:-1], openbid / self.medians[item], side="left"))
+        r = self.resid_pool.get((item, b))
+        if r is None or len(r) < 10:  # too few similar auctions: use all of this item's errors
+            r = self.resid_by_item[item]
+        return float(np.exp(mu + r[rng.integers(len(r))]))
 
     def _tip(self, ratio, suggested):
         if not self.evidence or self.low_start_bids is None:
@@ -282,7 +322,7 @@ def main():
             rep = {"n_auctions": len(a)}
         adv = PA().fit(a)
         rep["opening_bid_evidence"] = adv.evidence
-        REPORT_PATH.write_text(json.dumps(rep, indent=2))
+        REPORT_PATH.write_text(json.dumps(rep, indent=2), encoding="utf-8")
         joblib.dump(adv, MODEL_PATH)
         print(f"\nsaved {MODEL_PATH.name} and {REPORT_PATH.name}")
     elif args.cmd == "predict":

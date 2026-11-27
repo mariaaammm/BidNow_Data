@@ -1,15 +1,22 @@
 """
 Auction data simulator for BidNow (Data team) - runs locally, writes CSV files.
 
-It learns simple statistics from the real eBay-style auction.csv (prices, opening
-bids, number of bids, WHEN bids arrive, how concentrated bidders are) and
-generates fake users, listings and bids that behave similarly. Some auctions
-are already closed and some are still running "now", like a live site.
+It learns from the real eBay-style auction.csv (prices, opening bids, number of bids, WHEN bids
+arrive, how concentrated bidders are) and generates fake users, listings and bids that behave
+similarly. Some auctions are already closed and some are still running "now", like a live site.
+
+Two modes:
+  --mode ml     (default) prices, number of bids and the price-over-time curve come from machine
+                learning models trained on the real data (see sim_ml.py). Needs scikit-learn.
+                Takes about 15 seconds longer to start.
+  --mode stats  statistics and random sampling only. Faster, but prices climb too slowly during
+                an auction and 3-day auctions get unrealistically low opening bids.
 
 Run:
     python simulator.py                                     # 2000 listings, last 30 days
     python simulator.py --listings 5000 --days 60 --seed 7
     python simulator.py --categories categories.json        # also add ASSUMED extra categories
+    python simulator.py --mode stats                        # no machine learning
 
 Output (CSV, matches schema.sql): users.csv, listings.csv, bids.csv, validation.csv
 
@@ -31,11 +38,12 @@ HERE = Path(__file__).parent
 BUCKET_EDGES = [0.05, 0.25, 0.6, 0.9]  # opening bid as a share of the item's typical price (same buckets as price_advisor.py)
 ACTIVITY_POWER = 1.5
 USER_POOL_FACTOR = 3.0
+MIN_USERS = 100  # an auction can have up to ~90 different bidders plus its seller
 
 
 # ---------------------------------------------------------------- learning
 def load_real(path):
-    df = pd.read_csv(path)
+    df = pd.read_csv(path, encoding="utf-8-sig")
     df["duration_days"] = df.auction_type.str.extract(r"(\d+)")[0].astype(int)
     return df
 
@@ -50,7 +58,8 @@ def fit_params(df):
     for it, g in a.groupby("item"):
         p["items"][it] = {"n": len(g), "median_price": float(g.price.median()),
                           "mu": float(np.log(g.price).mean()), "sigma": float(np.log(g.price).std()),
-                          "openbids": g.openbid.values, "durs": g.dur.value_counts(normalize=True).sort_index()}
+                          "openbids": g.openbid.values, "durs": g.dur.value_counts(normalize=True).sort_index(),
+                          "pairs": np.column_stack([g.dur.values, g.openbid.values])}
     p["nbids_by_dur"] = {d: g.n_bids.values for d, g in a.groupby("dur")}
     # Real finding: a low opening bid attracts many more bids. Keep bid counts per (opening-bid bucket, duration).
     typical = a.item.map({it: v["median_price"] for it, v in p["items"].items()})
@@ -75,7 +84,8 @@ def build_profiles(p, categories, real_share):
     total_n = sum(v["n"] for v in p["items"].values())
     for it, v in p["items"].items():
         profiles.append({"name": it, "basis": "data", "typical": v["median_price"], "mu": v["mu"], "sigma": v["sigma"],
-                         "openbids": v["openbids"], "durs": v["durs"], "weight": real_share * v["n"] / total_n})
+                         "openbids": v["openbids"], "durs": v["durs"], "weight": real_share * v["n"] / total_n,
+                         "like": it, "scale": 1.0, "pairs": v["pairs"]})
     if categories:
         wsum = sum(c["weight"] for c in categories.values())
         for name, c in categories.items():
@@ -84,9 +94,30 @@ def build_profiles(p, categories, real_share):
             profiles.append({"name": name, "basis": "assumed", "typical": float(c["median_price"]),
                              "mu": float(np.log(c["median_price"])),
                              "sigma": c["price_sigma"], "openbids": like["openbids"] * scale,
-                             "durs": like["durs"], "weight": (1 - real_share) * c["weight"] / wsum})
+                             "durs": like["durs"], "weight": (1 - real_share) * c["weight"] / wsum,
+                             "like": c["like"], "scale": scale,
+                             "pairs": like["pairs"] * np.array([1.0, scale])})
     w = np.array([pr["weight"] for pr in profiles])
     return profiles, w / w.sum()
+
+
+def load_categories(path, p):
+    """Read categories.json and stop with a clear message if a category is unusable."""
+    try:
+        cats = json.loads(Path(path).read_text(encoding="utf-8-sig"))["categories"]
+    except (OSError, ValueError, KeyError) as e:
+        raise SystemExit(f"error: cannot read categories file {path}: {e!r}")
+    for name, c in cats.items():
+        missing = [k for k in ("like", "median_price", "price_sigma", "weight") if k not in c]
+        if missing:
+            raise SystemExit(f"error: category '{name}' is missing {missing}")
+        if c["like"] not in p["items"]:
+            raise SystemExit(f"error: category '{name}': 'like' must be one of {sorted(p['items'])}, got '{c['like']}'")
+        if not (c["median_price"] > 0 and c["price_sigma"] > 0 and c["weight"] > 0):
+            raise SystemExit(f"error: category '{name}': median_price, price_sigma and weight must be > 0")
+    if not cats:
+        raise SystemExit("error: the categories file has no categories")
+    return cats
 
 
 # ---------------------------------------------------------------- helpers
@@ -114,6 +145,7 @@ def bid_path(rng, n, openbid, price):
 
 def draw_unique(rng, cdf, k, banned):
     """k distinct users, drawn in proportion to their activity, never the seller."""
+    k = min(k, len(cdf) - len(banned))  # cannot pick more distinct people than exist (would loop forever)
     chosen, seen = [], set(banned)
     while len(chosen) < k:
         for u in np.searchsorted(cdf, rng.random(max(8, 2 * k))):
@@ -138,8 +170,8 @@ def assign_bidders(rng, n, bidders):
 
 
 # ---------------------------------------------------------------- simulate
-def simulate(p, n_listings, days, seed, now, n_users=None, categories=None, real_share=1.0):
-    rng = np.random.default_rng(seed)
+def make_users(rng, p, n_listings, days, now, n_users=None):
+    """Fake users: ratings, creation dates, how active each one is, and which ones also sell."""
     n_users = n_users or max(300, int(USER_POOL_FACTOR * n_listings * p["mean_bids"] / p["bids_per_bidder"]))
     uid = np.arange(1, n_users + 1)
     users = pd.DataFrame({"user_id": uid, "username": [f"user_{i:06d}" for i in uid],
@@ -147,7 +179,14 @@ def simulate(p, n_listings, days, seed, now, n_users=None, categories=None, real
     users["created_at"] = (now - pd.Timedelta(days=days + 7)) - pd.to_timedelta(rng.uniform(1, 400, n_users), unit="D")
     activity = rng.choice(p["bidder_counts"], n_users).astype(float) ** ACTIVITY_POWER  # from real bids-per-bidder
     cdf = np.cumsum(activity) / activity.sum()
-    sellers = rng.choice(n_users, size=max(30, n_users // 8), replace=False)
+    sellers = rng.choice(n_users, size=min(n_users, max(30, n_users // 8)), replace=False)
+    return users, cdf, sellers
+
+
+def simulate(p, n_listings, days, seed, now, n_users=None, categories=None, real_share=1.0):
+    """MODE 'stats': statistics and random sampling only (no machine learning)."""
+    rng = np.random.default_rng(seed)
+    users, cdf, sellers = make_users(rng, p, n_listings, days, now, n_users)
 
     profiles, pw = build_profiles(p, categories, real_share)
     listings, bids = [], []
@@ -202,6 +241,96 @@ def simulate(p, n_listings, days, seed, now, n_users=None, categories=None, real
     return users, listings, bids
 
 
+def amounts_from_progress(openbid, price, g):
+    """Turn "share of the climb reached" into money: rising bid amounts that end at the final price."""
+    x = openbid + (price - openbid) * g
+    x[0] = max(openbid, x[0], 0.01)
+    for i in range(1, len(x)):
+        x[i] = max(x[i], x[i - 1] + min_increment(x[i - 1]))  # every bid beats the previous one by a minimum step
+    return np.round(x, 2)
+
+
+def simulate_ml(p, models, n_listings, days, seed, now, n_users=None, categories=None, real_share=1.0):
+    """MODE 'ml': prices, number of bids and the price-over-time curve come from learned models (see sim_ml.py)."""
+    rng = np.random.default_rng(seed)
+    users, cdf, sellers = make_users(rng, p, n_listings, days, now, n_users)
+    profiles, pw = build_profiles(p, categories, real_share)
+
+    specs = []
+    for lid in range(1, n_listings + 1):  # pass 1: decide everything about each listing except the bid amounts
+        pr = profiles[rng.choice(len(profiles), p=pw)]
+        single = rng.random() < p["p_single_at_open"]  # rare auction where only the opening bid is ever placed
+        if pr["basis"] == "data":
+            # measured item: pick a real (length, opening bid) pair, then the learned model gives the price
+            dur, openbid = pr["pairs"][rng.integers(len(pr["pairs"]))]
+            dur, openbid = int(dur), float(openbid)
+            price = openbid
+            if not single:
+                price = None
+                for _ in range(30):
+                    cand = models.advisor.sample_price(pr["name"], dur, openbid, rng)
+                    if cand > openbid * 1.02:
+                        price = cand
+                        break
+                price = price if price is not None else openbid * 1.3
+        else:
+            # assumed category: its configured typical price must hold, so draw the price first,
+            # then a real (length, opening bid) pair that fits under it
+            if single:
+                dur, openbid = pr["pairs"][rng.integers(len(pr["pairs"]))]
+                dur, openbid = int(dur), float(openbid)
+                price = openbid
+            else:
+                price = float(np.exp(rng.normal(pr["mu"], pr["sigma"])))
+                fit = pr["pairs"][pr["pairs"][:, 1] < price * 0.98]
+                if len(fit):
+                    dur, openbid = fit[rng.integers(len(fit))]
+                else:
+                    dur, openbid = pr["pairs"][rng.integers(len(pr["pairs"]))][0], price * 0.3
+                dur, openbid = int(dur), float(openbid)
+        n = 1 if single else models.sample_count(rng, pr["like"], dur, openbid, price, pr["typical"])
+        openbid = max(round(openbid, 2), 0.01)
+
+        seller = int(rng.choice(sellers))
+        starts = now - pd.Timedelta(days=float(rng.uniform(0, days)))
+        u = np.sort(rng.choice(p["u_by_dur"][dur], n))
+        ratio = float(rng.choice(p["bidder_ratio"]))
+        n_bidders = int(np.clip(round(n * ratio), 1 if n == 1 else 2, n))
+        seq = [s + 1 for s in assign_bidders(rng, n, draw_unique(rng, cdf, n_bidders, {seller}))]
+        specs.append({"lid": lid, "pr": pr, "dur": dur, "openbid": openbid, "price": price, "n": n, "seller": seller,
+                      "starts": starts, "u": u, "seq": seq, "item": pr["like"],
+                      "rel_open": float(np.log1p(openbid / pr["typical"]))})
+
+    multi = [s for s in specs if s["n"] >= 2]  # pass 2: learned price-over-time curve for all auctions at once
+    for s, g in zip(multi, models.path_progress(multi, rng)):
+        s["amounts"] = amounts_from_progress(s["openbid"], s["price"], g)
+    for s in specs:
+        if s["n"] == 1:
+            s["amounts"] = np.array([round(max(s["openbid"], s["price"], 0.01), 2)])
+
+    listings, bids, bid_id = [], [], 1  # pass 3: open or close each auction relative to "now", write rows
+    for s in specs:
+        ends = s["starts"] + pd.Timedelta(days=s["dur"])
+        placed = (s["starts"] + pd.to_timedelta(s["u"] * s["dur"], unit="D")).floor("us")
+        closed = ends <= now
+        k = s["n"] if closed else int((placed <= now).sum())  # bids already visible at "now"
+        for j in range(k):
+            bids.append((bid_id, s["lid"], int(s["seq"][j]), float(s["amounts"][j]), placed[j]))
+            bid_id += 1
+        listings.append((s["lid"], s["seller"] + 1, s["pr"]["name"], s["pr"]["name"], s["pr"]["basis"], s["openbid"],
+                         s["dur"], s["starts"].floor("us"), ends.floor("us"),
+                         float(s["amounts"][k - 1]) if k else s["openbid"],
+                         float(s["amounts"][-1]) if closed else None, int(s["seq"][-1]) if closed else None,
+                         "closed" if closed else "active", k))
+    listings = pd.DataFrame(listings, columns=[
+        "listing_id", "seller_id", "title", "item", "price_basis", "start_price", "duration_days", "starts_at",
+        "ends_at", "current_price", "final_price", "winner_id", "status", "n_bids"])
+    bids = pd.DataFrame(bids, columns=["bid_id", "listing_id", "bidder_id", "amount", "placed_at"])
+    listings["winner_id"] = listings.winner_id.astype("Int64")
+    users["created_at"] = users.created_at.dt.floor("us")
+    return users, listings, bids
+
+
 # ---------------------------------------------------------------- checks
 def check_integrity(users, listings, bids, now):
     """Rules every row of the output must satisfy. Returns a list of (rule, passed)."""
@@ -231,7 +360,7 @@ def check_integrity(users, listings, bids, now):
     return checks
 
 
-def real_vs_sim(real_df, p, listings, bids, users):
+def real_vs_sim(real_df, p, listings, bids):
     """Compare the closed simulated auctions of REAL item types with the real data."""
     a = real_df.groupby("auctionid").agg(item=("item", "first"), price=("price", "first"),
                                          n_bids=("bid", "count"), n_bidders=("bidder", "nunique"))
@@ -254,6 +383,20 @@ def real_vs_sim(real_df, p, listings, bids, users):
               cl[cl.ratio < .25].n_bids.median()),
              ("median bids when opening bid > 60% of typical price", ra[ra.ratio > .6].n_bids.median(),
               cl[cl.ratio > .6].n_bids.median())]
+    # how fast does the highest bid climb during an auction? (highest bid so far / final price)
+    rd = real_df.assign(u=real_df.bidtime / real_df.duration_days)
+    rfin, rop = rd.groupby("auctionid").price.first(), rd.groupby("auctionid").openbid.first()
+    sd = bids[bids.listing_id.isin(cl.listing_id)].merge(cl[["listing_id", "starts_at", "duration_days"]], on="listing_id")
+    sd["u"] = (sd.placed_at - sd.starts_at).dt.total_seconds() / 86400 / sd.duration_days
+    sfin, sop = cl.set_index("listing_id").final_price, cl.set_index("listing_id").start_price
+    for f in (0.25, 0.5, 0.75, 0.9):
+        rh = rd[rd.u <= f].groupby("auctionid").bid.max().reindex(rfin.index).fillna(rop)
+        sh = sd[sd.u <= f].groupby("listing_id").amount.max().reindex(sfin.index).fillna(sop)
+        rows.append((f"highest bid / final price at {int(f * 100)}% of the time", (rh / rfin).median(), (sh / sfin).median()))
+    rdur = real_df.groupby("auctionid").agg(dur=("duration_days", "first"), openbid=("openbid", "first"))
+    for d in (3, 7):
+        rows.append((f"median opening bid, {d}-day auctions", rdur[rdur.dur == d].openbid.median(),
+                     cl[cl.duration_days == d].start_price.median()))
     rb = real_df.groupby("bidder").size().sort_values(ascending=False)
     sb = bids.groupby("bidder_id").size().sort_values(ascending=False)
     top = lambda s: s.iloc[:max(1, int(len(s) * .1))].sum() / s.sum()
@@ -275,14 +418,30 @@ def main():
     ap.add_argument("--categories", default=None, help="JSON file of ASSUMED extra categories (see categories.json)")
     ap.add_argument("--real-share", type=float, default=0.3,
                     help="with --categories: share of listings from the 3 real item types")
+    ap.add_argument("--mode", choices=["ml", "stats"], default="ml",
+                    help="ml: price, bid count and price-over-time come from learned models (needs scikit-learn). "
+                         "stats: simple statistics only")
     args = ap.parse_args()
+    if args.listings < 1 or args.days < 1:
+        ap.error("--listings and --days must be at least 1")
+    if args.users is not None and args.users < MIN_USERS:
+        ap.error(f"--users must be at least {MIN_USERS} (an auction can have up to ~90 different bidders)")
+    if not 0 <= args.real_share <= 1:
+        ap.error("--real-share must be between 0 and 1")
 
     now = pd.Timestamp(args.now, tz="UTC") if args.now else pd.Timestamp.now(tz="UTC").floor("s")
     real = load_real(args.data)
     p = fit_params(real)
-    cats = json.loads(Path(args.categories).read_text())["categories"] if args.categories else None
-    users, listings, bids = simulate(p, args.listings, args.days, args.seed, now, args.users, cats,
-                                     args.real_share if cats else 1.0)
+    cats = load_categories(args.categories, p) if args.categories else None
+    share = args.real_share if cats else 1.0
+    if args.mode == "ml":
+        from sim_ml import LearnedModels  # imported here so --mode stats works without scikit-learn
+
+        print("training the learned models on the real data (about 15 seconds)...")
+        models = LearnedModels(real, {it: v["median_price"] for it, v in p["items"].items()}, args.data)
+        users, listings, bids = simulate_ml(p, models, args.listings, args.days, args.seed, now, args.users, cats, share)
+    else:
+        users, listings, bids = simulate(p, args.listings, args.days, args.seed, now, args.users, cats, share)
 
     checks = check_integrity(users, listings, bids, now)
     bad = [name for name, ok in checks if not ok]
@@ -294,9 +453,10 @@ def main():
     users.to_csv(out / "users.csv", index=False)
     listings.to_csv(out / "listings.csv", index=False)
     bids.to_csv(out / "bids.csv", index=False)
-    table = real_vs_sim(real, p, listings, bids, users)
+    table = real_vs_sim(real, p, listings, bids)
     table.to_csv(out / "validation.csv", index=False)
     st = listings.status.value_counts().to_dict()
+    print(f"mode: {args.mode}")
     print(f"wrote {len(users)} users, {len(listings)} listings ({st.get('closed', 0)} closed, "
           f"{st.get('active', 0)} active), {len(bids)} bids -> {out}")
     print(f"integrity checks: all {len(checks)} passed\n")
