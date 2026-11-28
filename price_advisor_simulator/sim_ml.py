@@ -177,4 +177,4 @@ if __name__ == "__main__":
     from simulator import load_real
     data = HERE / "auction.csv"
     evaluate(load_real(str(data)), data)
-    print("\nPRICE model: see `python price_advisor.py train` (typical error 9.4% vs 10.9% for the median baseline).")
+    print("\nPRICE model: see `python price_advisor.py train` (tests the price advisor on unseen auctions).")
