@@ -13,3 +13,5 @@ conf.txt
 *.db
 .pytest_cache/
 .ipynb_checkpoints/
+*.joblib
+category_map/data/
