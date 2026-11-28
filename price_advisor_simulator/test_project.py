@@ -3,6 +3,7 @@ Automatic checks for the whole project. Run:   python test_project.py
 Takes about 1-2 minutes. Prints PASS/FAIL per check and exits with an error if anything fails.
 """
 import json
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -26,6 +27,16 @@ def run(*args, cwd=HERE):
 
 
 def main():
+    # the tests retrain with --no-eval, which rewrites these report files: put the real ones back afterwards
+    keep = {f: f.read_bytes() for f in (HERE / "price_advisor_report.json", HERE / "live_forecast_report.json") if f.exists()}
+    try:
+        run_checks()
+    finally:
+        for f, data in keep.items():
+            f.write_bytes(data)
+
+
+def run_checks():
     tmp = Path(tempfile.mkdtemp())
 
     # ---- loading real and Excel-style data
@@ -59,6 +70,33 @@ def main():
         check(f"rejects bad input {bad}", r.returncode != 0 and "Traceback" not in r.stderr)
     r = run("price_advisor.py", "predict", "--item", "Nonexistent", "--days", 7, "--openbid", 5)
     check("unknown item gives a clear error", r.returncode != 0 and "unknown item" in r.stderr)
+
+    # ---- price advisor quality, honesty of ranges, new model internals (one repeat of each validation, ~30 s)
+    full = pa.load_auctions(HERE / "auction.csv")
+    for grouped in (False, True):
+        tag = "strict (unseen opening bids)" if grouped else "ordinary"
+        rep = pa.evaluate(full, repeats=1, seed=5, grouped=grouped)
+        o = rep["overall"]
+        check(f"advisor beats the item-median baseline on mean error and RMSE, {tag}",
+              o["model"]["MAE"] < o["base_item"]["MAE"] and o["model"]["RMSE"] < o["base_item"]["RMSE"],
+              f"{o['model']['MAE']} vs {o['base_item']['MAE']}")
+        lo_ok = 68 <= o["range_coverage_pct"] <= 90 if grouped else 74 <= o["range_coverage_pct"] <= 90
+        check(f"80% range coverage is in a plausible band, {tag}", lo_ok, f"{o['range_coverage_pct']}%")
+    adv = pa.PriceAdvisor().fit(full)
+    new_ob = adv.predict("Cartier wristwatch", 7, 123.45)  # an opening bid never seen in the data
+    check("opening bid never seen in training still gives an ordered, positive range",
+          0 < new_ob["range_80pct"][0] <= new_ob["expected_final_price"] <= new_ob["range_80pct"][1])
+    lo_p, hi_p = adv.predict("Palm Pilot M515 PDA", 7, 1), adv.predict("Cartier wristwatch", 7, 1)
+    check("Cartier range is much wider than Palm Pilot range (items have their own spread)",
+          hi_p["range_80pct"][1] / hi_p["range_80pct"][0] > 2 * lo_p["range_80pct"][1] / lo_p["range_80pct"][0])
+    import joblib
+    joblib.dump(adv, tmp / "m.joblib")
+    check("trained advisor survives save and load with identical predictions",
+          joblib.load(tmp / "m.joblib").predict("Xbox game console", 7, 9.99) == adv.predict("Xbox game console", 7, 9.99))
+    one_group = pd.DataFrame({"item": ["X"] * 40, "duration_days": [7] * 40, "openbid": [1.0] * 40,
+                              "price": np.linspace(10, 30, 40)})
+    check("advisor fits when every auction has the same opening bid (no crash in the strict-range step)",
+          pa.PriceAdvisor().fit(one_group).predict("X", 7, 1.0)["expected_final_price"] > 0)
 
     # ---- live forecast
     r = run("live_forecast.py", "train")

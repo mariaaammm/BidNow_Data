@@ -1,5 +1,208 @@
 {
   "n_auctions": 628,
+  "cv": "5-fold x 2",
+  "overall": {
+    "base_item": {
+      "MAE": 143.19,
+      "RMSE": 426.39,
+      "MedAE": 22.62,
+      "median_abs_pct_err": 10.8
+    },
+    "base_item_dur": {
+      "MAE": 143.42,
+      "RMSE": 424.44,
+      "MedAE": 22.5,
+      "median_abs_pct_err": 10.5
+    },
+    "legacy_gb": {
+      "MAE": 112.73,
+      "RMSE": 325.57,
+      "MedAE": 20.43,
+      "median_abs_pct_err": 9.7
+    },
+    "model": {
+      "MAE": 111.67,
+      "RMSE": 307.45,
+      "MedAE": 20.92,
+      "median_abs_pct_err": 10.3
+    },
+    "range_coverage_pct": 81.0,
+    "typical_high_over_low": 1.38
+  },
+  "by_item": {
+    "Cartier wristwatch": {
+      "auctions": 136,
+      "base_item": {
+        "MAE": 575.06,
+        "RMSE": 913.12,
+        "MedAE": 307.44,
+        "median_abs_pct_err": 58.6
+      },
+      "legacy_gb": {
+        "MAE": 437.91,
+        "RMSE": 695.57,
+        "MedAE": 249.61,
+        "median_abs_pct_err": 46.4
+      },
+      "model": {
+        "MAE": 432.17,
+        "RMSE": 656.45,
+        "MedAE": 241.52,
+        "median_abs_pct_err": 48.1
+      },
+      "range_coverage_pct": 80.5,
+      "typical_high_over_low": 6.84
+    },
+    "Palm Pilot M515 PDA": {
+      "auctions": 343,
+      "base_item": {
+        "MAE": 17.89,
+        "RMSE": 22.26,
+        "MedAE": 15.5,
+        "median_abs_pct_err": 6.9
+      },
+      "legacy_gb": {
+        "MAE": 16.31,
+        "RMSE": 20.97,
+        "MedAE": 12.36,
+        "median_abs_pct_err": 5.6
+      },
+      "model": {
+        "MAE": 16.91,
+        "RMSE": 21.22,
+        "MedAE": 13.13,
+        "median_abs_pct_err": 5.9
+      },
+      "range_coverage_pct": 82.2,
+      "typical_high_over_low": 1.28
+    },
+    "Xbox game console": {
+      "auctions": 149,
+      "base_item": {
+        "MAE": 37.45,
+        "RMSE": 63.94,
+        "MedAE": 22.41,
+        "median_abs_pct_err": 18.0
+      },
+      "legacy_gb": {
+        "MAE": 37.87,
+        "RMSE": 64.25,
+        "MedAE": 23.04,
+        "median_abs_pct_err": 19.0
+      },
+      "model": {
+        "MAE": 37.28,
+        "RMSE": 63.63,
+        "MedAE": 21.11,
+        "median_abs_pct_err": 16.8
+      },
+      "range_coverage_pct": 78.5,
+      "typical_high_over_low": 2.39
+    }
+  },
+  "strict_test": {
+    "n_auctions": 628,
+    "cv": "5-fold x 2, grouped by item+opening bid",
+    "overall": {
+      "base_item": {
+        "MAE": 145.19,
+        "RMSE": 425.43,
+        "MedAE": 23.81,
+        "median_abs_pct_err": 11.1
+      },
+      "base_item_dur": {
+        "MAE": 146.36,
+        "RMSE": 425.59,
+        "MedAE": 24.46,
+        "median_abs_pct_err": 12.0
+      },
+      "legacy_gb": {
+        "MAE": 119.05,
+        "RMSE": 347.43,
+        "MedAE": 25.16,
+        "median_abs_pct_err": 11.6
+      },
+      "model": {
+        "MAE": 113.48,
+        "RMSE": 318.48,
+        "MedAE": 22.69,
+        "median_abs_pct_err": 10.9
+      },
+      "range_coverage_pct": 76.4,
+      "typical_high_over_low": 1.31
+    },
+    "by_item": {
+      "Cartier wristwatch": {
+        "auctions": 136,
+        "base_item": {
+          "MAE": 583.11,
+          "RMSE": 911.03,
+          "MedAE": 307.65,
+          "median_abs_pct_err": 57.2
+        },
+        "legacy_gb": {
+          "MAE": 456.23,
+          "RMSE": 742.44,
+          "MedAE": 212.54,
+          "median_abs_pct_err": 40.9
+        },
+        "model": {
+          "MAE": 435.86,
+          "RMSE": 680.03,
+          "MedAE": 226.38,
+          "median_abs_pct_err": 42.1
+        },
+        "range_coverage_pct": 76.8,
+        "typical_high_over_low": 7.12
+      },
+      "Palm Pilot M515 PDA": {
+        "auctions": 343,
+        "base_item": {
+          "MAE": 18.36,
+          "RMSE": 22.7,
+          "MedAE": 16.75,
+          "median_abs_pct_err": 7.0
+        },
+        "legacy_gb": {
+          "MAE": 20.8,
+          "RMSE": 25.75,
+          "MedAE": 17.55,
+          "median_abs_pct_err": 7.7
+        },
+        "model": {
+          "MAE": 18.62,
+          "RMSE": 23.46,
+          "MedAE": 15.21,
+          "median_abs_pct_err": 6.8
+        },
+        "range_coverage_pct": 74.6,
+        "typical_high_over_low": 1.29
+      },
+      "Xbox game console": {
+        "auctions": 149,
+        "base_item": {
+          "MAE": 37.43,
+          "RMSE": 63.81,
+          "MedAE": 22.0,
+          "median_abs_pct_err": 18.3
+        },
+        "legacy_gb": {
+          "MAE": 37.47,
+          "RMSE": 64.06,
+          "MedAE": 22.62,
+          "median_abs_pct_err": 18.7
+        },
+        "model": {
+          "MAE": 37.61,
+          "RMSE": 64.35,
+          "MedAE": 19.89,
+          "median_abs_pct_err": 16.3
+        },
+        "range_coverage_pct": 79.9,
+        "typical_high_over_low": 2.48
+      }
+    }
+  },
   "opening_bid_evidence": [
     {
       "opening_bid_vs_typical_price": "under 5%",

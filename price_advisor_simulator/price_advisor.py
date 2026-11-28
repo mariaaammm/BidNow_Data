@@ -7,7 +7,7 @@ What it does
   tip based on how similar auctions behaved in your data.
 
 Commands (run from this folder)
-  python price_advisor.py train                      # evaluate + train on auction.csv
+  python price_advisor.py train                      # evaluate (ordinary + strict test) and train on auction.csv
   python price_advisor.py train --data auction.csv my_local_prices.csv
   python price_advisor.py predict --item "Xbox game console" --days 7 --openbid 9.99
   python price_advisor.py items                      # what the trained model knows
@@ -28,7 +28,9 @@ import joblib
 import numpy as np
 import pandas as pd
 from sklearn.ensemble import GradientBoostingRegressor
-from sklearn.model_selection import KFold, RepeatedKFold
+from sklearn.linear_model import Ridge
+from sklearn.model_selection import KFold, RepeatedStratifiedKFold, StratifiedGroupKFold
+from sklearn.preprocessing import StandardScaler
 
 HERE = Path(__file__).parent
 DEFAULT_DATA = HERE / "auction.csv"
@@ -104,16 +106,63 @@ def nice(x: float) -> float:
     return float(f"{x:.2g}")
 
 
+LOW_OPENBID_SHARE = 0.01  # "very low opening bid" = at most 1% of the item's typical price (works in any currency)
+
+
+class _RidgeInteractions:
+    """Linear model on log(price) in which every item gets its own slopes for duration and opening bid.
+
+    It extrapolates smoothly to opening bids it has never seen (trees cannot), which is what the boosted trees lack.
+    The item's typical price is learned inside fit() from the training rows only, so cross-validation stays clean."""
+
+    def __init__(self, alpha=3.0):
+        self.alpha = alpha
+
+    def _design(self, X):
+        ob = np.expm1(X["log_openbid"].values)
+        typ = sum(X[c].values * self.typical_[c] for c in self.item_cols_)
+        rel = ob / typ
+        base = pd.DataFrame({"dur": X["duration_days"].values, "lob": X["log_openbid"].values,
+                             "rel": np.log1p(rel), "low": (rel <= LOW_OPENBID_SHARE).astype(float)})
+        D = pd.concat([base, X[self.item_cols_].reset_index(drop=True)], axis=1)
+        for c in self.item_cols_:
+            for k in ("dur", "lob", "rel", "low"):
+                D[f"{c}*{k}"] = D[c] * D[k]
+        return D.values
+
+    def fit(self, X, y):
+        X = X.reset_index(drop=True)
+        self.item_cols_ = [c for c in X.columns if c.startswith("is_")]
+        price = np.exp(np.asarray(y))
+        self.typical_ = {c: float(np.median(price[X[c].values == 1])) for c in self.item_cols_}
+        D = self._design(X)
+        self.scaler_ = StandardScaler().fit(D)
+        self.ridge_ = Ridge(alpha=self.alpha).fit(self.scaler_.transform(D), y)
+        return self
+
+    def predict(self, X):
+        return self.ridge_.predict(self.scaler_.transform(self._design(X.reset_index(drop=True))))
+
+
+def _legacy_model():
+    """The model used before the 2026-11 review (single depth-2 boosted-tree model). Kept only as a comparison baseline."""
+    return GradientBoostingRegressor(loss="huber", n_estimators=150, max_depth=2,
+                                     learning_rate=0.05, subsample=0.8, random_state=0)
+
+
 def _new_models():
+    """Two simple models whose log-price predictions are averaged (see README: why this pair)."""
     return [
-        GradientBoostingRegressor(loss="huber", n_estimators=150, max_depth=2,
+        GradientBoostingRegressor(loss="huber", n_estimators=150, max_depth=1,   # depth 1 = additive, no feature interactions
                                   learning_rate=0.05, subsample=0.8, random_state=0),
+        _RidgeInteractions(alpha=3.0),
     ]
 
 
 # ------------------------------------------------------------------ model
 class PriceAdvisor:
-    """Gradient-boosting model (robust Huber loss) fitted on log(price), plus per-item price ranges."""
+    """Average of a shallow gradient-boosting model (robust Huber loss) and a per-item linear model, fitted on
+    log(price), plus per-item price ranges from out-of-fold errors."""
 
     def _X(self, item, duration_days, openbid):
         item = pd.Series(item).reset_index(drop=True)
@@ -144,7 +193,18 @@ class PriceAdvisor:
         for tr, te in KFold(5, shuffle=True, random_state=0).split(a):
             oof[te] = self._fit_predict(X.iloc[tr], y[tr], X.iloc[te])
         resid = y - oof
-        self.pooled_q = (float(np.quantile(resid, 0.10)), float(np.quantile(resid, 0.90)))
+        # Second set of errors from a STRICTER test: folds in which an item's opening bid never appears in training.
+        # Prices for opening bids the model has not seen are less accurate, so ranges built from both sets stay honest
+        # in both situations (validated in the README: ordinary 81% / strict 77% coverage vs 79.5% / 74% before).
+        oof_strict = oof
+        groups = (a.item + "|" + a.openbid.astype(str)).values
+        if len(set(groups)) >= 5:
+            oof_strict = np.zeros(len(a))
+            for tr, te in StratifiedGroupKFold(5, shuffle=True, random_state=0).split(a, a.item, groups):
+                oof_strict[te] = self._fit_predict(X.iloc[tr], y[tr], X.iloc[te])
+        resid_strict = y - oof_strict
+        both = np.concatenate([resid, resid_strict])
+        self.pooled_q = (float(np.quantile(both, 0.10)), float(np.quantile(both, 0.90)))
         # Estimates made WITHOUT having seen each auction (used by simulator.py --mode ml: it must not use predictions that
         # are too good because the model has already seen that auction)
         self.oof_mu = (pd.DataFrame({"item": a.item.values, "dur": a.duration_days.astype(float).values,
@@ -157,7 +217,8 @@ class PriceAdvisor:
             self.resid_by_item[it] = r  # real out-of-fold errors, used by simulator.py --mode ml to draw realistic prices
             for b in range(len(LABELS)):  # the error is smaller when the opening bid is already high: keep them apart
                 self.resid_pool[(it, b)] = resid[((a.item == it).values) & (bucket == b)]
-            self.resid_q[it] = ((float(np.quantile(r, 0.10)), float(np.quantile(r, 0.90)))
+            r_both = np.concatenate([r, resid_strict[(a.item == it).values]])
+            self.resid_q[it] = ((float(np.quantile(r_both, 0.10)), float(np.quantile(r_both, 0.90)))
                                 if len(r) >= POOLED_RANGE_MIN_ROWS else self.pooled_q)
         self._fit_evidence(a)
         return self
@@ -165,6 +226,8 @@ class PriceAdvisor:
     def _fit_evidence(self, a):
         """How did the opening bid (relative to the item's typical price) relate to bids and price?"""
         self.evidence, self.low_start_bids = [], None
+        if "n_bids" not in a:
+            return
         d = a.dropna(subset=["n_bids"]).copy()
         if d.empty:
             return
@@ -230,19 +293,36 @@ class PriceAdvisor:
 
 
 # ------------------------------------------------------------------ evaluation
-def evaluate(a: pd.DataFrame, repeats=2, seed=1):
+def _cv_splits(a, repeats, seed, grouped):
+    """Reproducible 5-fold splits over AUCTIONS (never bid rows), balanced by item.
+    grouped=True also keeps auctions with the same item and opening bid on the same side, so every test auction
+    has an opening bid the model never saw for that item (a stricter test than the usual one)."""
+    if grouped:
+        g = (a.item + "|" + a.openbid.astype(str)).values
+        for r in range(repeats):
+            for tr, te in StratifiedGroupKFold(5, shuffle=True, random_state=seed + r).split(a, a.item, g):
+                yield r, tr, te
+    else:
+        for f, (tr, te) in enumerate(RepeatedStratifiedKFold(n_splits=5, n_repeats=repeats, random_state=seed).split(a, a.item)):
+            yield f // 5, tr, te
+
+
+def evaluate(a: pd.DataFrame, repeats=2, seed=1, grouped=False):
     """Repeated 5-fold cross-validation (always tested on auctions the model has not seen)."""
     a = a.reset_index(drop=True)
     n, items = len(a), sorted(a.item.unique())
-    kinds = ["base_item", "base_item_dur", "model"]
+    kinds = ["base_item", "base_item_dur", "legacy_gb", "model"]
     P = {k: np.zeros((repeats, n)) for k in kinds}
     LO, HI = np.zeros((repeats, n)), np.zeros((repeats, n))
-    for f, (tr, te) in enumerate(RepeatedKFold(n_splits=5, n_repeats=repeats, random_state=seed).split(a)):
-        r, trd, ted = f // 5, a.iloc[tr], a.iloc[te]
+    for r, tr, te in _cv_splits(a, repeats, seed, grouped):
+        trd, ted = a.iloc[tr], a.iloc[te]
         adv = PriceAdvisor().fit(trd)
-        mu = adv._predict_log(adv._X(ted.item, ted.duration_days, ted.openbid))
+        Xte = adv._X(ted.item, ted.duration_days, ted.openbid)
+        mu = adv._predict_log(Xte)
         q = np.array([adv.resid_q[i] for i in ted.item])
         P["model"][r, te], LO[r, te], HI[r, te] = np.exp(mu), np.exp(mu + q[:, 0]), np.exp(mu + q[:, 1])
+        old = _legacy_model().fit(adv._X(trd.item, trd.duration_days, trd.openbid), np.log(trd.price.values))
+        P["legacy_gb"][r, te] = np.exp(old.predict(Xte))
         m1 = trd.groupby("item").price.median()
         m2 = trd.groupby(["item", "duration_days"]).price.median()
         P["base_item"][r, te] = ted.item.map(m1).values
@@ -251,9 +331,11 @@ def evaluate(a: pd.DataFrame, repeats=2, seed=1):
 
     def stats(mask, k):
         yy = y[mask]
-        return {"MAE": round(float(np.mean([np.abs(P[k][r][mask] - yy).mean() for r in range(repeats)])), 2),
-                "median_abs_pct_err": round(float(np.mean([np.median(np.abs(P[k][r][mask] - yy) / yy)
-                                                           for r in range(repeats)]) * 100), 1)}
+        e = [P[k][r][mask] - yy for r in range(repeats)]
+        return {"MAE": round(float(np.mean([np.abs(x).mean() for x in e])), 2),
+                "RMSE": round(float(np.mean([np.sqrt((x ** 2).mean()) for x in e])), 2),
+                "MedAE": round(float(np.mean([np.median(np.abs(x)) for x in e])), 2),
+                "median_abs_pct_err": round(float(np.mean([np.median(np.abs(x) / yy) for x in e]) * 100), 1)}
 
     def rng(mask):
         yy = y[mask]
@@ -262,26 +344,26 @@ def evaluate(a: pd.DataFrame, repeats=2, seed=1):
         return {"range_coverage_pct": round(float(cov * 100), 1), "typical_high_over_low": round(float(wid), 2)}
 
     allm = np.ones(n, bool)
-    rep = {"n_auctions": n, "cv": f"5-fold x {repeats}",
+    rep = {"n_auctions": n, "cv": f"5-fold x {repeats}" + (", grouped by item+opening bid" if grouped else ""),
            "overall": {**{k: stats(allm, k) for k in kinds}, **rng(allm)}, "by_item": {}}
     for it in items:
         m = (a.item == it).values
-        rep["by_item"][it] = {"auctions": int(m.sum()), **{k: stats(m, k) for k in ("base_item", "model")}, **rng(m)}
+        rep["by_item"][it] = {"auctions": int(m.sum()), **{k: stats(m, k) for k in ("base_item", "legacy_gb", "model")}, **rng(m)}
     return rep
 
 
 def print_report(rep):
     o = rep["overall"]
     print(f"\nTested on unseen auctions ({rep['cv']} cross-validation, {rep['n_auctions']} auctions)")
-    print(f"{'':28}{'mean error':>12}{'typical %':>11}")
+    print(f"{'':32}{'mean err':>9}{'RMSE':>9}{'median':>9}{'typical %':>11}")
     for k, label in [("base_item", "baseline: item median"), ("base_item_dur", "baseline: item+days median"),
-                     ("model", "price advisor")]:
-        print(f"{label:28}{o[k]['MAE']:>12.2f}{o[k]['median_abs_pct_err']:>10.1f}%")
+                     ("legacy_gb", "previous model (1 boosted GB)"), ("model", "price advisor")]:
+        print(f"{label:32}{o[k]['MAE']:>9.2f}{o[k]['RMSE']:>9.2f}{o[k]['MedAE']:>9.2f}{o[k]['median_abs_pct_err']:>10.1f}%")
     print(f"80% range contains the real price {o['range_coverage_pct']}% of the time")
-    print("\nBy item:")
+    print("By item (typical % error: baseline -> previous model -> price advisor):")
     for it, r in rep["by_item"].items():
-        print(f"  {it} ({r['auctions']} auctions): baseline {r['base_item']['median_abs_pct_err']}% -> "
-              f"advisor {r['model']['median_abs_pct_err']}% typical error, "
+        print(f"  {it} ({r['auctions']} auctions): {r['base_item']['median_abs_pct_err']}% -> "
+              f"{r['legacy_gb']['median_abs_pct_err']}% -> {r['model']['median_abs_pct_err']}%, "
               f"range covers {r['range_coverage_pct']}% (high/low x{r['typical_high_over_low']})")
 
 
@@ -318,6 +400,8 @@ def main():
         if not args.no_eval:
             rep = evaluate(a)
             print_report(rep)
+            rep["strict_test"] = evaluate(a, grouped=True)  # opening bids the model has never seen for that item
+            print_report(rep["strict_test"])
         else:
             rep = {"n_auctions": len(a)}
         adv = PA().fit(a)
